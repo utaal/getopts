@@ -423,11 +423,35 @@ impl Options {
     ///
     /// Returns `Err(Fail)` on failure: use the `Debug` implementation of `Fail`
     /// to display information about it.
-    pub fn parse<C: IntoIterator>(&self, args: C) -> Result
+    pub fn parse<C: IntoIterator>(&self, args: C) -> result::Result<Matches, Fail>
     where
-        C::Item: AsRef<OsStr>,
+        C::Item: AsRef<OsStr>+Clone,
+    {
+        self.parse_partial(args).and_then(|(matches, unmatched)| {
+            if let Some(first) = unmatched.first() {
+                Err(Fail::UnrecognizedOption(format!("{:?}", first.as_ref())))
+            } else {
+                Ok(matches)
+            }
+        })
+    }
+
+    /// Parse command line arguments according to the provided options.
+    ///
+    /// On success returns `Ok((Matches, unmatched))`. Use methods on `Matches`,
+    /// such as `opt_present`, `opt_str`, etc. to interrogate results.
+    /// `unmatched` contains arguments that were not matched.
+    ///
+    /// # Panics
+    ///
+    /// Returns `Err(Fail)` on failure: use the `Debug` implementation of `Fail`
+    /// to display information about it.
+    pub fn parse_partial<C: IntoIterator>(&self, args: C) -> result::Result<(Matches, Vec<C::Item>), Fail>
+    where
+        C::Item: AsRef<OsStr>+Clone,
     {
         let opts: Vec<Opt> = self.grps.iter().map(|x| x.long_to_short()).collect();
+        let mut unmatched: Vec<C::Item> = vec![];
 
         let mut vals = (0..opts.len())
             .map(|_| Vec::new())
@@ -441,24 +465,24 @@ impl Options {
                 i.as_ref()
                     .to_str()
                     .ok_or_else(|| Fail::UnrecognizedOption(format!("{:?}", i.as_ref())))
-                    .map(|s| s.to_owned())
+                    .map(|s| (i.clone(), s.to_owned()))
             })
             .collect::<::std::result::Result<Vec<_>, _>>()?;
         let mut args = args.into_iter().peekable();
         let mut arg_pos = 0;
-        while let Some(cur) = args.next() {
+        while let Some((osstr, cur)) = args.next() {
             if !is_arg(&cur) {
                 free.push(cur);
                 match self.parsing_style {
                     ParsingStyle::FloatingFrees => {}
                     ParsingStyle::StopAtFirstFree => {
-                        free.extend(args);
+                        free.extend(args.map(|(_, c)| c));
                         break;
                     }
                 }
             } else if cur == "--" {
                 args_end = Some(free.len());
-                free.extend(args);
+                free.extend(args.map(|(_, c)| c));
                 break;
             } else {
                 let mut name = None;
@@ -481,20 +505,17 @@ impl Options {
                     for (j, ch) in cur.char_indices().skip(1) {
                         let opt = Short(ch);
 
-                        let opt_id = match find_opt(&opts, &opt) {
-                            Some(id) => id,
-                            None => return Err(UnrecognizedOption(opt.to_string())),
-                        };
+                        let opt_id = find_opt(&opts, &opt);
 
                         // In a series of potential options (eg. -aheJ), if we
                         // see one which takes an argument, we assume all
                         // subsequent characters make up the argument. This
                         // allows options such as -L/usr/local/lib/foo to be
                         // interpreted correctly
-                        let arg_follows = match opts[opt_id].hasarg {
+                        let arg_follows = opt_id.map(|opt_id| match opts[opt_id].hasarg {
                             Yes | Maybe => true,
                             No => false,
-                        };
+                        }).unwrap_or(false);
 
                         if arg_follows {
                             name = Some(opt);
@@ -504,14 +525,21 @@ impl Options {
                                 break;
                             }
                         } else {
-                            vals[opt_id].push((arg_pos, Given));
+                            if let Some(opt_id) = opt_id {
+                                vals[opt_id].push((arg_pos, Given));
+                            } else {
+                                unmatched.push(osstr.clone());
+                            }
                         }
                     }
                 }
                 if let Some(nm) = name {
                     let opt_id = match find_opt(&opts, &nm) {
                         Some(id) => id,
-                        None => return Err(UnrecognizedOption(nm.to_string())),
+                        None => {
+                            unmatched.push(osstr.clone());
+                            continue;
+                        },
                     };
                     match opts[opt_id].hasarg {
                         No => {
@@ -530,17 +558,17 @@ impl Options {
                             if let Some(i_arg) = i_arg.take() {
                                 vals[opt_id].push((arg_pos, Val(i_arg)));
                             } else if was_long
-                                || args.peek().map_or(true, |n| is_arg(&n))
+                                || args.peek().map_or(true, |(_, n)| is_arg(&n))
                             {
                                 vals[opt_id].push((arg_pos, Given));
                             } else {
-                                vals[opt_id].push((arg_pos, Val(args.next().unwrap())));
+                                vals[opt_id].push((arg_pos, Val(args.next().map(|(_, c)| c).unwrap())));
                             }
                         }
                         Yes => {
                             if let Some(i_arg) = i_arg.take() {
                                 vals[opt_id].push((arg_pos, Val(i_arg)));
-                            } else if let Some(n) = args.next() {
+                            } else if let Some((_, n)) = args.next() {
                                 vals[opt_id].push((arg_pos, Val(n)));
                             } else {
                                 return Err(ArgumentMissing(nm.to_string()));
@@ -565,7 +593,7 @@ impl Options {
         // in option does not exist in `free` and must be replaced with `None`
         args_end = args_end.filter(|pos| pos != &free.len());
 
-        Ok(Matches { opts, vals, free, args_end })
+        Ok((Matches { opts, vals, free, args_end }, unmatched))
     }
 
     /// Derive a short one-line usage summary from a set of long options.
@@ -812,9 +840,6 @@ pub enum Fail {
 }
 
 impl Error for Fail {}
-
-/// The result of parsing a command line with a set of options.
-pub type Result = result::Result<Matches, Fail>;
 
 impl Name {
     fn from_str(nm: &str) -> Name {

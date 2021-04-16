@@ -534,9 +534,23 @@ fn test_unrecognized_option() {
         Err(UnrecognizedOption(_)) => {}
         _ => panic!(),
     }
+    match opts.parse_partial(&long_args) {
+        Ok((_, unmatched)) => {
+            assert_eq!(unmatched.len(), 1);
+            assert_eq!(unmatched[0], "--untest");
+        },
+        _ => panic!(),
+    }
     let short_args = vec!["-u".to_string()];
     match opts.parse(&short_args) {
         Err(UnrecognizedOption(_)) => {}
+        _ => panic!(),
+    }
+    match opts.parse_partial(&short_args) {
+        Ok((_, unmatched)) => {
+            assert_eq!(unmatched.len(), 1);
+            assert_eq!(unmatched[0], "-u");
+        },
         _ => panic!(),
     }
 }
