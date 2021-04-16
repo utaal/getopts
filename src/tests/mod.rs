@@ -248,7 +248,7 @@ fn test_free_trailing_only() {
 
 #[test]
 fn test_free_trailing_args() {
-    let args = vec!["pre".to_owned(), "--".to_owned(), "post".to_owned() ];
+    let args = vec!["pre".to_owned(), "--".to_owned(), "post".to_owned()];
     match Options::new().parse(&args) {
         Ok(ref m) => {
             assert_eq!(m.free_trailing_start(), Some(1));
@@ -526,7 +526,7 @@ fn test_free_argument_is_hyphen() {
 }
 
 #[test]
-fn test_unrecognized_option() {
+fn test_unrecognized_option_floating_frees() {
     let long_args = vec!["--untest".to_string()];
     let mut opts = Options::new();
     opts.optmulti("t", "test", "testing", "TEST");
@@ -534,9 +534,54 @@ fn test_unrecognized_option() {
         Err(UnrecognizedOption(_)) => {}
         _ => panic!(),
     }
+    match opts.parse_partial(&long_args) {
+        Ok((_, unmatched)) => {
+            assert_eq!(unmatched.len(), 1);
+            assert_eq!(unmatched[0], "--untest");
+        }
+        _ => panic!(),
+    }
     let short_args = vec!["-u".to_string()];
     match opts.parse(&short_args) {
         Err(UnrecognizedOption(_)) => {}
+        _ => panic!(),
+    }
+    match opts.parse_partial(&short_args) {
+        Ok((_, unmatched)) => {
+            assert_eq!(unmatched.len(), 1);
+            assert_eq!(unmatched[0], "-u");
+        }
+        _ => panic!(),
+    }
+}
+
+#[test]
+fn test_unrecognized_option_stop_at_first_free() {
+    let long_args = vec!["--untest".to_string()];
+    let mut opts = Options::new();
+    opts.parsing_style(ParsingStyle::StopAtFirstFree);
+    opts.optmulti("t", "test", "testing", "TEST");
+    match opts.parse(&long_args) {
+        Err(UnrecognizedOption(_)) => {}
+        _ => panic!(),
+    }
+    match opts.parse_partial(&long_args) {
+        Ok((_, unmatched)) => {
+            assert_eq!(unmatched.len(), 1);
+            assert_eq!(unmatched[0], "--untest");
+        }
+        _ => panic!(),
+    }
+    let short_args = vec!["-u".to_string()];
+    match opts.parse(&short_args) {
+        Err(UnrecognizedOption(_)) => {}
+        _ => panic!(),
+    }
+    match opts.parse_partial(&short_args) {
+        Ok((_, unmatched)) => {
+            assert_eq!(unmatched.len(), 1);
+            assert_eq!(unmatched[0], "-u");
+        }
         _ => panic!(),
     }
 }
@@ -741,10 +786,7 @@ fn test_multi() {
     );
 
     assert_eq!(matches_both.opts_str_first(&["e"]).unwrap(), "foo");
-    assert_eq!(
-        matches_both.opts_str_first(&["encrypt"]).unwrap(),
-        "bar"
-    );
+    assert_eq!(matches_both.opts_str_first(&["encrypt"]).unwrap(), "bar");
     assert_eq!(
         matches_both.opts_str_first(&["e", "encrypt"]).unwrap(),
         "foo"

@@ -427,7 +427,39 @@ impl Options {
     where
         C::Item: AsRef<OsStr>,
     {
+        self.parse_partial(args).and_then(|(matches, unmatched)| {
+            match matches.free.len().cmp(&unmatched.len()) {
+                std::cmp::Ordering::Less => {
+                    let first_unrecognized = &unmatched[matches.free.len()];
+                    Err(Fail::UnrecognizedOption(first_unrecognized.clone()))
+                }
+                std::cmp::Ordering::Equal => Ok(matches),
+                std::cmp::Ordering::Greater => {
+                    panic!("something is wrong with the accounting of unmatched args")
+                }
+            }
+        })
+    }
+
+    /// Parse command line arguments according to the provided options.
+    ///
+    /// On success returns `Ok((Matches, unmatched))`. Use methods on `Matches`,
+    /// such as `opt_present`, `opt_str`, etc. to interrogate results.
+    /// `unmatched` contains arguments that were not matched.
+    ///
+    /// # Panics
+    ///
+    /// Returns `Err(Fail)` on failure: use the `Debug` implementation of `Fail`
+    /// to display information about it.
+    pub fn parse_partial<C: IntoIterator>(
+        &self,
+        args: C,
+    ) -> result::Result<(Matches, Vec<String>), Fail>
+    where
+        C::Item: AsRef<OsStr>,
+    {
         let opts: Vec<Opt> = self.grps.iter().map(|x| x.long_to_short()).collect();
+        let mut unmatched: Vec<String> = vec![];
 
         let mut vals = (0..opts.len())
             .map(|_| Vec::new())
@@ -448,16 +480,19 @@ impl Options {
         let mut arg_pos = 0;
         while let Some(cur) = args.next() {
             if !is_arg(&cur) {
-                free.push(cur);
+                free.push(cur.clone());
+                unmatched.push(cur.clone());
                 match self.parsing_style {
                     ParsingStyle::FloatingFrees => {}
                     ParsingStyle::StopAtFirstFree => {
-                        free.extend(args);
+                        free.extend(args.clone());
+                        unmatched.extend(args);
                         break;
                     }
                 }
             } else if cur == "--" {
                 args_end = Some(free.len());
+                unmatched.extend(args.clone());
                 free.extend(args);
                 break;
             } else {
@@ -481,20 +516,19 @@ impl Options {
                     for (j, ch) in cur.char_indices().skip(1) {
                         let opt = Short(ch);
 
-                        let opt_id = match find_opt(&opts, &opt) {
-                            Some(id) => id,
-                            None => return Err(UnrecognizedOption(opt.to_string())),
-                        };
+                        let opt_id = find_opt(&opts, &opt);
 
                         // In a series of potential options (eg. -aheJ), if we
                         // see one which takes an argument, we assume all
                         // subsequent characters make up the argument. This
                         // allows options such as -L/usr/local/lib/foo to be
                         // interpreted correctly
-                        let arg_follows = match opts[opt_id].hasarg {
-                            Yes | Maybe => true,
-                            No => false,
-                        };
+                        let arg_follows = opt_id
+                            .map(|opt_id| match opts[opt_id].hasarg {
+                                Yes | Maybe => true,
+                                No => false,
+                            })
+                            .unwrap_or(false);
 
                         if arg_follows {
                             name = Some(opt);
@@ -504,14 +538,21 @@ impl Options {
                                 break;
                             }
                         } else {
-                            vals[opt_id].push((arg_pos, Given));
+                            if let Some(opt_id) = opt_id {
+                                vals[opt_id].push((arg_pos, Given));
+                            } else {
+                                unmatched.push(cur.clone());
+                            }
                         }
                     }
                 }
                 if let Some(nm) = name {
                     let opt_id = match find_opt(&opts, &nm) {
                         Some(id) => id,
-                        None => return Err(UnrecognizedOption(nm.to_string())),
+                        None => {
+                            unmatched.push(cur);
+                            continue;
+                        }
                     };
                     match opts[opt_id].hasarg {
                         No => {
@@ -529,9 +570,7 @@ impl Options {
                             // FloatingFrees is in use.
                             if let Some(i_arg) = i_arg.take() {
                                 vals[opt_id].push((arg_pos, Val(i_arg)));
-                            } else if was_long
-                                || args.peek().map_or(true, |n| is_arg(&n))
-                            {
+                            } else if was_long || args.peek().map_or(true, |n| is_arg(&n)) {
                                 vals[opt_id].push((arg_pos, Given));
                             } else {
                                 vals[opt_id].push((arg_pos, Val(args.next().unwrap())));
@@ -565,7 +604,15 @@ impl Options {
         // in option does not exist in `free` and must be replaced with `None`
         args_end = args_end.filter(|pos| pos != &free.len());
 
-        Ok(Matches { opts, vals, free, args_end })
+        Ok((
+            Matches {
+                opts,
+                vals,
+                free,
+                args_end,
+            },
+            unmatched,
+        ))
     }
 
     /// Derive a short one-line usage summary from a set of long options.
@@ -915,7 +962,10 @@ impl Matches {
     ///
     /// This function will panic if the option name is not defined.
     pub fn opt_positions(&self, name: &str) -> Vec<usize> {
-        self.opt_vals(name).into_iter().map(|(pos, _)| pos).collect()
+        self.opt_vals(name)
+            .into_iter()
+            .map(|(pos, _)| pos)
+            .collect()
     }
 
     /// Returns true if any of several options were matched.
