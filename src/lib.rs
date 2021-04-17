@@ -428,10 +428,13 @@ impl Options {
         C::Item: AsRef<OsStr>+Clone,
     {
         self.parse_partial(args).and_then(|(matches, unmatched)| {
-            if let Some(first) = unmatched.first() {
-                Err(Fail::UnrecognizedOption(format!("{:?}", first.as_ref())))
-            } else {
-                Ok(matches)
+            match matches.free.len().cmp(&unmatched.len()) {
+                std::cmp::Ordering::Less => {
+                    let first_unrecognized = &unmatched[matches.free.len()];
+                    Err(Fail::UnrecognizedOption(format!("{:?}", first_unrecognized.as_ref())))
+                }
+                std::cmp::Ordering::Equal => Ok(matches),
+                std::cmp::Ordering::Greater => panic!("something is wrong with the accounting of unmatched args"),
             }
         })
     }
@@ -473,16 +476,21 @@ impl Options {
         while let Some((osstr, cur)) = args.next() {
             if !is_arg(&cur) {
                 free.push(cur);
+                unmatched.push(osstr);
                 match self.parsing_style {
                     ParsingStyle::FloatingFrees => {}
                     ParsingStyle::StopAtFirstFree => {
-                        free.extend(args.map(|(_, c)| c));
+                        let remaining = args.collect::<Vec<_>>();
+                        unmatched.extend(remaining.iter().map(|(osstr, _)| osstr).cloned());
+                        free.extend(remaining.into_iter().map(|(_, c)| c));
                         break;
                     }
                 }
             } else if cur == "--" {
                 args_end = Some(free.len());
-                free.extend(args.map(|(_, c)| c));
+                let remaining = args.collect::<Vec<_>>();
+                unmatched.extend(remaining.iter().map(|(osstr, _)| osstr).cloned());
+                free.extend(remaining.into_iter().map(|(_, c)| c));
                 break;
             } else {
                 let mut name = None;
