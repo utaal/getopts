@@ -1333,3 +1333,18 @@ fn test_opt_strs_pos() {
         ]
     );
 }
+
+#[test]
+fn test_unmatched_short_opts() {
+    let args: Vec<&str> = vec!["-Lhh"];
+    let mut opts = Options::new();
+    opts.optflag("h", "help", "print this help menu");
+    // This should not report an error about `help` being passed twice.
+    match opts.parse_partial(&args) {
+        Ok((_, unmatched)) => {
+            assert_eq!(unmatched.len(), 1);
+            assert_eq!(*unmatched[0], "-Lhh");
+        }
+        Err(e) => panic!("{}", e),
+    }
+}

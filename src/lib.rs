@@ -510,6 +510,22 @@ impl Options {
                     }
                 } else {
                     was_long = false;
+                    // rustc, for example, accepts a number of flags that don't
+                    // follow the usual convention of `-abc` being equivalent to
+                    // `-a`, `-b`, `-c`. For example, `-L<some-path>` passed to
+                    // rustc by cargo. The entire flag need to be treated as
+                    // unmatched rather than split, which would lead to
+                    // individual characters in `<some-path>` being parsed as
+                    // flags. This is needed to use `parse_partial` with rustc
+                    // invocations
+                    let first_matches = self
+                        .grps
+                        .iter()
+                        .any(|opt_group: &OptGroup| opt_group.short_name == cur[1..2]);
+                    if !first_matches {
+                        unmatched.push(osstr);
+                        continue;
+                    }
                     for (j, ch) in cur.char_indices().skip(1) {
                         let opt = Short(ch);
 
